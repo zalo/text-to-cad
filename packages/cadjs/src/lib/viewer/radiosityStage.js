@@ -42,14 +42,14 @@ const FLOOR_ATLAS_FRACTION = 0.5;
 /** Chart gutter (texels) on each side. */
 const PADDING = 2;
 
-/** Pre-blur (PMREM roughness) applied to an environment map for the bake. */
+/** Pre-blur (PMREM roughness) applied to the environment for the bake. */
 const ENVIRONMENT_BLUR = 0.25;
 /**
- * Pre-blur for the procedural room: fully diffuse-convolved, so the room's few
- * overhead panels become a smooth all-around sky with a mild top bias and the
- * baked shadows are omnidirectional contact shadows rather than cast shadows.
+ * The procedural room's light panels differ per wall (two bright ones on a
+ * single side); averaging the room over four rotations about the up axis
+ * lights every side of the scene alike while keeping the panels sharp.
  */
-const ROOM_ENVIRONMENT_BLUR = 1;
+const ROOM_ENVIRONMENT_SYMMETRY = 4;
 
 const UP = new THREE.Vector3(0, 0, 1);
 
@@ -185,7 +185,7 @@ export class RadiosityStage {
     this._topologyHash = 0;
     this._info = null;
     this._disposed = false;
-    this._environment = { texture: null, rotation: new THREE.Euler(), intensity: 1, blur: ENVIRONMENT_BLUR };
+    this._environment = { texture: null, rotation: new THREE.Euler(), intensity: 1, symmetry: 1 };
     this._pmremGenerator = null;
     this._roomPmrem = null;
     this._createSolver();
@@ -303,17 +303,17 @@ export class RadiosityStage {
     const sameRotation = nextRotation
       ? env.rotation.equals(nextRotation)
       : env.rotation.x === 0 && env.rotation.y === 0 && env.rotation.z === 0;
-    if (env.texture === nextTexture && env.intensity === nextIntensity && sameRotation && env.blur === ENVIRONMENT_BLUR) {
+    if (env.texture === nextTexture && env.intensity === nextIntensity && sameRotation && env.symmetry === 1) {
       return;
     }
     env.texture = nextTexture;
-    env.blur = ENVIRONMENT_BLUR;
+    env.symmetry = 1;
     if (nextRotation) env.rotation.copy(nextRotation);
     else env.rotation.set(0, 0, 0);
     env.intensity = nextIntensity;
     this._displayUniforms.uRadIntensity.value = env.intensity;
     this._displayUniforms.uRadReplaceAmbient.value = 0;
-    this._solver.setEnvironment(env.texture, env.rotation, env.blur);
+    this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR, env.symmetry);
   }
 
   /**
@@ -340,11 +340,11 @@ export class RadiosityStage {
       luminance(ambient) * Math.max(Number(ambientIntensity) || 0, 0);
     const env = this._environment;
     const texture = this._roomPmrem?.texture || null;
-    if (env.texture !== texture || env.blur !== ROOM_ENVIRONMENT_BLUR) {
+    if (env.texture !== texture || env.symmetry !== ROOM_ENVIRONMENT_SYMMETRY) {
       env.texture = texture;
-      env.blur = ROOM_ENVIRONMENT_BLUR;
+      env.symmetry = ROOM_ENVIRONMENT_SYMMETRY;
       env.rotation.set(0, 0, 0);
-      this._solver.setEnvironment(env.texture, env.rotation, env.blur);
+      this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR, env.symmetry);
     }
     const upIrradiance = this._solver.environmentUpIrradiance;
     env.intensity = upIrradiance > 1e-6 ? target / upIrradiance : target;
@@ -352,12 +352,23 @@ export class RadiosityStage {
     this._displayUniforms.uRadReplaceAmbient.value = 1;
   }
 
-  /** PMREM of three's RoomEnvironment, rotated so its ceiling faces +Z. */
+  /**
+   * PMREM of three's RoomEnvironment, rotated so its ceiling faces +Z and
+   * re-centred: the room is authored with the origin on its floor, so seen
+   * from there every panel is overhead and the lighting is lopsided. Moving
+   * the camera to the room's centre puts the wall panels around the horizon.
+   */
   _buildRoomPmrem() {
     if (!this._pmremGenerator) {
       this._pmremGenerator = new THREE.PMREMGenerator(this._renderer);
     }
     const room = new RoomEnvironment();
+    const shell = room.children.find((child) => child.isMesh && child.material?.side === THREE.BackSide);
+    const centre = shell ? shell.position.clone() : new THREE.Vector3();
+    const pivot = new THREE.Group();
+    for (const child of [...room.children]) pivot.add(child);
+    pivot.position.copy(centre).negate();
+    room.add(pivot);
     // The room is authored Y-up; the viewer's scenes are Z-up.
     room.rotation.x = Math.PI / 2;
     room.updateMatrixWorld(true);
@@ -447,7 +458,7 @@ export class RadiosityStage {
       envSampling: s.envSampling,
       displayUniforms: this._displayUniforms
     });
-    this._solver.setEnvironment(this._environment.texture, this._environment.rotation, this._environment.blur);
+    this._solver.setEnvironment(this._environment.texture, this._environment.rotation, ENVIRONMENT_BLUR, this._environment.symmetry);
     previous?.dispose();
     this._needsBuild = true;
   }

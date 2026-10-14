@@ -125,12 +125,34 @@ const GLSL_COMMON = /* glsl */ `
 const GLSL_ENV = /* glsl */ `
   uniform mat3 uEnvRotation;
   uniform float uEnvBlur;
+  uniform vec3 uEnvUp;
+  #ifndef TCV_ENV_SYMMETRY
+    #define TCV_ENV_SYMMETRY 1
+  #endif
   #ifdef TCV_HAS_ENV
     uniform sampler2D envMap;
     #define ENVMAP_TYPE_CUBE_UV
     #include <cube_uv_reflection_fragment>
-    vec3 tcvEnvRadiance( vec3 d ) {
+    vec3 tcvEnvSample( vec3 d ) {
       return textureCubeUV( envMap, uEnvRotation * d, uEnvBlur ).rgb;
+    }
+    // Optionally average the environment over N rotations about the up axis
+    // so every side of the scene sees the same lights (used for the
+    // procedural room, whose panels differ per wall).
+    vec3 tcvEnvRadiance( vec3 d ) {
+      #if TCV_ENV_SYMMETRY > 1
+        vec3 acc = vec3( 0.0 );
+        for ( int k = 0; k < TCV_ENV_SYMMETRY; k ++ ) {
+          float a = 6.28318531 * float( k ) / float( TCV_ENV_SYMMETRY );
+          float c = cos( a );
+          float sn = sin( a );
+          vec3 dr = d * c + cross( uEnvUp, d ) * sn + uEnvUp * dot( uEnvUp, d ) * ( 1.0 - c );
+          acc += tcvEnvSample( dr );
+        }
+        return acc / float( TCV_ENV_SYMMETRY );
+      #else
+        return tcvEnvSample( d );
+      #endif
     }
   #else
     vec3 tcvEnvRadiance( vec3 d ) { return vec3( 1.0 ); }
@@ -721,6 +743,7 @@ export class RadiosityLightmap {
     this._envTexture = null;
     this._envRotation = new THREE.Matrix3();
     this._envBlur = 0.1;
+    this._envSymmetry = 1;
     this._envHeight = 0;
     this._disposed = false;
     this._lateral = 1;
@@ -895,6 +918,7 @@ export class RadiosityLightmap {
     }
     const u = this._gatherMaterial.uniforms;
     u.uUp.value.copy(this._up);
+    u.uEnvUp.value.copy(this._up);
     u.uFloorEnabled.value = floor ? 1 : 0;
     if (floorRefUv) u.uFloorRefUv.value.copy(floorRefUv);
     this.reset();
@@ -902,25 +926,31 @@ export class RadiosityLightmap {
 
   /**
    * Set the light source: a PMREM environment texture (or null for a uniform
-   * white sky), its rotation (the scene's `environmentRotation`) and a
-   * pre-blur roughness that softens small bright sources (0 = sharp).
+   * white sky), its rotation (the scene's `environmentRotation`), a pre-blur
+   * roughness that softens small bright sources (0 = sharp) and an optional
+   * N-fold symmetry about the up axis (the environment is averaged over N
+   * rotations so every side of the scene is lit alike).
    */
-  setEnvironment(texture, rotation, blur) {
+  setEnvironment(texture, rotation, blur, symmetry = 1) {
     const height = texture?.image?.height ?? 0;
     const hadEnv = this._envTexture !== null;
+    const nextSymmetry = Math.max(1, Math.floor(Number(symmetry) || 1));
+    const symmetryChanged = nextSymmetry !== this._envSymmetry;
+    this._envSymmetry = nextSymmetry;
     this._envTexture = texture || null;
     this._envBlur = blur;
     // three samples the environment with the inverse rotation
     this._envRotation
       .setFromMatrix4(_m4.makeRotationFromEuler(rotation || new THREE.Euler()))
       .transpose();
-    if (hadEnv !== (this._envTexture !== null) || height !== this._envHeight) {
+    if (hadEnv !== (this._envTexture !== null) || height !== this._envHeight || symmetryChanged) {
       this._envHeight = height;
       this._gatherMaterial.dispose();
       this._gatherMaterial = this._createGatherMaterial();
       for (const m of this._gatherProxies) m.material = this._gatherMaterial;
       const u = this._gatherMaterial.uniforms;
       u.uUp.value.copy(this._up);
+      u.uEnvUp.value.copy(this._up);
       u.uFloorEnabled.value = this._floorProxy ? 1 : 0;
       this._applySelfBias();
     }
@@ -1049,7 +1079,8 @@ export class RadiosityLightmap {
       uniforms: {
         envMap: { value: this._envTexture },
         uEnvRotation: { value: gu.uEnvRotation.value },
-        uEnvBlur: { value: this._envBlur }
+        uEnvBlur: { value: this._envBlur },
+        uEnvUp: { value: gu.uEnvUp.value }
       },
       defines: { ...this._gatherMaterial.defines },
       depthTest: false,
@@ -1148,9 +1179,11 @@ export class RadiosityLightmap {
       uFloorAlbedo: { value: new THREE.Color(0.3, 0.3, 0.3) },
       uFloorRefUv: { value: new THREE.Vector2(0, 0) },
       uEnvRotation: { value: new THREE.Matrix3() },
-      uEnvBlur: { value: this._envBlur }
+      uEnvBlur: { value: this._envBlur },
+      uEnvUp: { value: this._up.clone() }
     };
     if (defines.TCV_HAS_ENV) {
+      defines.TCV_ENV_SYMMETRY = this._envSymmetry;
       uniforms.envMap = { value: this._envTexture };
     }
     const material = new THREE.ShaderMaterial({
