@@ -515,3 +515,48 @@ test("the snapshot theme resolves by id but is never offered in the picker", () 
   // THEME_PRESETS is what the viewer's theme popover lists.
   assert.equal(THEME_PRESETS.some((preset) => preset.id === SNAPSHOT_THEME_ID), false);
 });
+
+test("global illumination normalizes to the shared defaults and clamps overrides", () => {
+  const normalized = normalizeThemeSettings({});
+  assert.deepEqual(normalized.lighting.globalIllumination, {
+    enabled: true,
+    quality: "medium",
+    directions: 16,
+    maxSamples: 4000,
+    shadow: 0.8,
+    bounce: 1
+  });
+  for (const preset of THEME_PRESETS) {
+    assert.deepEqual(
+      normalizeThemeSettings(preset.settings).lighting.globalIllumination,
+      normalized.lighting.globalIllumination,
+      `${preset.id} should inherit the global illumination defaults`
+    );
+  }
+  const overridden = normalizeThemeSettings({
+    lighting: {
+      globalIllumination: {
+        enabled: false,
+        quality: "ULTRA",
+        directions: 7,
+        maxSamples: 99999,
+        shadow: -1,
+        bounce: 5
+      }
+    }
+  });
+  assert.deepEqual(overridden.lighting.globalIllumination, {
+    enabled: false,
+    quality: "medium",
+    directions: 16,
+    maxSamples: 4000,
+    shadow: 0,
+    bounce: 2
+  });
+  const high = normalizeThemeSettings({
+    lighting: { globalIllumination: { quality: "high", directions: "4", maxSamples: 1500.4 } }
+  });
+  assert.equal(high.lighting.globalIllumination.quality, "high");
+  assert.equal(high.lighting.globalIllumination.directions, 4);
+  assert.equal(high.lighting.globalIllumination.maxSamples, 1500);
+});

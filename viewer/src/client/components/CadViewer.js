@@ -84,9 +84,11 @@ import {
   getViewerThemeValue,
   getStageFloorSize,
   normalizeFloorMode,
+  resolveStageFloorColor,
   resolveWireframeEdgeColor,
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
+import { RadiosityStage } from "cadjs/lib/viewer/radiosityStage";
 import {
   updateGridHelper as updateStageGridHelper,
   updateOriginAxis as updateStageOriginAxis
@@ -678,6 +680,90 @@ function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ 
   if (shadowPlane) {
     runtime.stageGroup.add(shadowPlane);
   }
+}
+
+// Progressive radiosity (theme `lighting.globalIllumination`): keeps one
+// RadiosityStage per runtime in step with the theme, the displayed model, the
+// stage floor and the environment. Called from the lighting, environment and
+// model effects; the render loop steps the stage every frame. The stage's
+// shadow catcher lives directly under the scene (not in stageGroup, which is
+// cleared and disposed on every stage rebuild).
+function syncRuntimeRadiosity(runtime, context) {
+  if (!runtime?.THREE || !runtime?.scene || !runtime?.renderer) {
+    return;
+  }
+  const settings = context?.themeSettings?.lighting?.globalIllumination;
+  const wanted = settings?.enabled === true &&
+    context?.implicitActive !== true &&
+    runtime.softwareRendering !== true &&
+    runtime.hasVisibleModel === true &&
+    RadiosityStage.supported(runtime.renderer);
+  if (!wanted) {
+    if (runtime.radiosity) {
+      runtime.radiosity.group.parent?.remove(runtime.radiosity.group);
+      runtime.radiosity.dispose();
+      runtime.radiosity = null;
+      runtime.requestRender();
+    }
+    return;
+  }
+
+  const stageSettings = {
+    quality: settings.quality,
+    directions: settings.directions,
+    maxSamples: settings.maxSamples,
+    shadow: settings.shadow,
+    bounce: settings.bounce
+  };
+  let stage = runtime.radiosity;
+  if (!stage) {
+    stage = new RadiosityStage(runtime.renderer, stageSettings);
+    stage.setRecordsProvider(() => runtime.cadScene?.displayRecords || runtime.displayRecords || []);
+    runtime.radiosity = stage;
+  } else {
+    stage.configure(stageSettings);
+  }
+  if (stage.group.parent !== runtime.scene) {
+    runtime.scene.add(stage.group);
+  }
+
+  // The ground: the stage floor's plane, when there is one, both catches the
+  // baked shadows and bounces light back (its colour feeds the bounce).
+  const bounds = runtime.modelBounds;
+  const hasBounds = bounds && Array.isArray(bounds.min) && Array.isArray(bounds.max);
+  if (context.floorMode === THEME_FLOOR_MODES.STAGE && hasBounds) {
+    const offset = runtime.modelGroup?.position;
+    const center = new runtime.THREE.Vector3(
+      (toNumber(bounds.min[0]) + toNumber(bounds.max[0])) / 2 + toNumber(offset?.x),
+      (toNumber(bounds.min[1]) + toNumber(bounds.max[1])) / 2 + toNumber(offset?.y),
+      (toNumber(bounds.min[2]) + toNumber(bounds.max[2])) / 2 + toNumber(offset?.z)
+    );
+    const extent = Math.max(
+      toNumber(bounds.max[0]) - toNumber(bounds.min[0]),
+      toNumber(bounds.max[1]) - toNumber(bounds.min[1]),
+      toNumber(bounds.max[2]) - toNumber(bounds.min[2]),
+      1e-6
+    );
+    stage.setFloor({
+      center,
+      level: toNumber(runtime.gridFloorZ),
+      extent,
+      albedo: resolveStageFloorColor(runtime.THREE, context.viewerTheme, context.themeSettings)
+    });
+  } else {
+    stage.setFloor(null);
+  }
+
+  // Light source: the environment map (PMREM shared with the display
+  // materials). Without one the bake is a pure occlusion term over a white
+  // sky, which still darkens the ambient/hemisphere lights and the floor.
+  const environment = context.themeSettings?.environment;
+  if (environment?.enabled && runtime.environmentPmrem?.texture) {
+    stage.setEnvironment(runtime.environmentPmrem.texture, null, 1);
+  } else {
+    stage.setEnvironment(null, null, 0);
+  }
+  runtime.requestRender();
 }
 
 function getViewportFrameMetrics(runtime, frameInsets = {}) {
@@ -2002,6 +2088,14 @@ const CadViewer = forwardRef(function CadViewer({
     ? normalizeFloorMode(floorModeOverride, defaultFloorMode)
     : defaultFloorMode;
   const floorFollowsModel = floorSettings.followModel !== false;
+  // Latest inputs for syncRuntimeRadiosity, read by whichever effect runs.
+  const radiosityContextRef = useRef(null);
+  radiosityContextRef.current = {
+    themeSettings: normalizedThemeSettings,
+    viewerTheme,
+    floorMode: resolvedFloorMode,
+    implicitActive
+  };
   const updateActiveGridHelper = useCallback((
     runtime,
     activeViewerTheme,
@@ -3887,6 +3981,7 @@ const CadViewer = forwardRef(function CadViewer({
     } else {
       clearSceneGroup(runtime.stageGroup);
     }
+    syncRuntimeRadiosity(runtime, radiosityContextRef.current);
     runtime.requestRender();
   }, [
     defaultGridRadius,
@@ -3913,10 +4008,13 @@ const CadViewer = forwardRef(function CadViewer({
       disposeTexture(runtime.environmentTexture);
       runtime.environmentTexture = null;
       runtime.environmentTextureUrl = "";
+      runtime.environmentPmrem?.dispose?.();
+      runtime.environmentPmrem = null;
     };
     const applyBackgroundFallback = () => {
       clearEnvironmentTexture();
       applyActiveSceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
+      syncRuntimeRadiosity(runtime, radiosityContextRef.current);
       runtime.requestRender();
     };
 
@@ -3951,9 +4049,19 @@ const CadViewer = forwardRef(function CadViewer({
         disposeTexture(runtime.environmentTexture);
         runtime.environmentTexture = nextTexture;
         runtime.environmentTextureUrl = textureUrl;
+        runtime.environmentPmrem?.dispose?.();
+        runtime.environmentPmrem = null;
       }
 
-      runtime.scene.environment = runtime.environmentTexture;
+      // Pre-filter the equirect once (three would do the same internally for
+      // scene.environment) so the radiosity bake can sample the same PMREM.
+      if (!runtime.environmentPmrem) {
+        if (!runtime.pmremGenerator) {
+          runtime.pmremGenerator = new runtime.THREE.PMREMGenerator(runtime.renderer);
+        }
+        runtime.environmentPmrem = runtime.pmremGenerator.fromEquirectangular(runtime.environmentTexture);
+      }
+      runtime.scene.environment = runtime.environmentPmrem.texture;
       viewerAlertChangeRef.current?.(null);
 
       if (runtime.scene.environmentRotation?.set) {
@@ -3967,6 +4075,7 @@ const CadViewer = forwardRef(function CadViewer({
       } else {
         applyActiveSceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
       }
+      syncRuntimeRadiosity(runtime, radiosityContextRef.current);
       runtime.requestRender();
     };
 
@@ -4088,6 +4197,7 @@ const CadViewer = forwardRef(function CadViewer({
         runtime.hasVisibleModel = false;
         runtime.activeModelKey = "";
       }
+      syncRuntimeRadiosity(runtime, radiosityContextRef.current);
       runtime.requestRender();
     };
 
@@ -4327,6 +4437,7 @@ const CadViewer = forwardRef(function CadViewer({
     );
     updateSpotLightTarget(runtime);
     updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
+    syncRuntimeRadiosity(runtime, radiosityContextRef.current);
 
     modelGroup.position.copy(modelOffset);
     edgesGroup.position.copy(modelOffset);
@@ -4505,6 +4616,7 @@ const CadViewer = forwardRef(function CadViewer({
     );
     updateSpotLightTarget(runtime);
     updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
+    syncRuntimeRadiosity(runtime, radiosityContextRef.current);
     runtime.requestRender();
   }, [
     meshData?.parts,

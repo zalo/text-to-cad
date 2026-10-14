@@ -16,6 +16,12 @@ CAD references, and verify generated assets without leaving the browser.
   picking, copied CAD references, and STEP parameter controls.
 - Previews mesh files, DXF flat patterns, URDF/SDF robots, and SRDF group
   states in one app shell.
+- Lights mesh models with progressive radiosity (theme
+  `lighting.globalIllumination`): environment-lit soft shadows, contact
+  occlusion and colour bleed baked into a lightmap that refines over a few
+  seconds, plus a shadow-catching ground under the stage floor. Needs WebGL2
+  with float render targets; software renderers and the implicit raymarcher
+  fall back to the plain lights.
 - Runs against either a local filesystem backend or hosted Vercel Blob storage.
 - Can regenerate STEP GLB/topology artifacts and generated-DXF drawing
   packages when the CAD Python runtime is

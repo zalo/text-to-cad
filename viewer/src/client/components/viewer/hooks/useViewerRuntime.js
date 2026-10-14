@@ -421,6 +421,9 @@ export function useViewerRuntime({
           emitPerspectiveChange(runtimeRef.current);
         }
         fitCameraDepthRange(runtimeRef.current);
+        // Progressive radiosity accumulates one bounce per frame (into its
+        // own render targets) and holds the loop open until it converges.
+        const radiosityRefining = runtimeRef.current?.radiosity?.step?.() === true;
         renderer.shadowMap.needsUpdate = interactionState.shadowsDirty === true;
         interactionState.shadowsDirty = false;
         renderer.render(scene, runtimeRef.current?.camera || camera);
@@ -437,6 +440,7 @@ export function useViewerRuntime({
           cameraTransitionActive ||
           keyboardOrbitMoved ||
           needsMoreFrames ||
+          radiosityRefining ||
           // Hold the loop open for the whole gesture so a mesh scene keeps
           // repainting at interaction quality. A render type whose frame costs
           // tens of milliseconds (the implicit raymarcher) opts out: it would
@@ -776,6 +780,12 @@ export function useViewerRuntime({
         environmentTextureUrl: "",
         gridConfig: null,
         gridHelper: null,
+        // Progressive radiosity stage (cadjs/lib/viewer/radiosityStage) and the
+        // PMREM it and the display materials share; owned by CadViewer's
+        // lighting/environment effects, stepped from renderFrame above.
+        radiosity: null,
+        pmremGenerator: null,
+        environmentPmrem: null,
         floorMode,
         hasVisibleModel: false,
         edgePickThreshold: 1.5,
@@ -873,6 +883,12 @@ export function useViewerRuntime({
         disposeSceneObject(runtime.axesHelper);
         disposeTexture(runtime.sceneBackgroundTexture);
         disposeTexture(runtime.environmentTexture);
+        runtime.radiosity?.dispose?.();
+        runtime.radiosity = null;
+        runtime.environmentPmrem?.dispose?.();
+        runtime.environmentPmrem = null;
+        runtime.pmremGenerator?.dispose?.();
+        runtime.pmremGenerator = null;
         runtime.renderer.dispose();
         if (container.contains(runtime.renderer.domElement)) {
           container.removeChild(runtime.renderer.domElement);

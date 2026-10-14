@@ -264,6 +264,36 @@ export const DEFAULT_RIM_LIGHT_SETTINGS = Object.freeze({
   position: Object.freeze({ x: -260, y: 240, z: 180 })
 });
 
+// Progressive radiosity (lightmap global illumination) for the interactive
+// mesh viewer: environment-lit soft shadows, contact-hardening occlusion and
+// colour bleed baked into a lightmap that refines over frames. Themes that
+// predate the setting normalize to these values. `quality` picks the lightmap
+// and illumination-map sizes, `directions` how many global directions each
+// bounce rasterizes (1, 4, 9 or 16), `maxSamples` the accumulated directions
+// after which refinement stops (0 = never), `shadow` the 0..1 strength of the
+// baked occlusion, `bounce` the indirect-light strength (0 = direct only).
+export const GLOBAL_ILLUMINATION_QUALITY_OPTIONS = Object.freeze(["low", "medium", "high"]);
+export const GLOBAL_ILLUMINATION_DIRECTION_OPTIONS = Object.freeze([1, 4, 9, 16]);
+export const MAX_GLOBAL_ILLUMINATION_SAMPLES = 4000;
+export const DEFAULT_GLOBAL_ILLUMINATION_SETTINGS = Object.freeze({
+  enabled: true,
+  quality: "medium",
+  directions: 16,
+  maxSamples: MAX_GLOBAL_ILLUMINATION_SAMPLES,
+  shadow: 0.8,
+  bounce: 1
+});
+
+function normalizeGlobalIlluminationQuality(value, fallback = DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.quality) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return GLOBAL_ILLUMINATION_QUALITY_OPTIONS.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeGlobalIlluminationDirections(value, fallback = DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.directions) {
+  const numeric = Math.floor(Number(value));
+  return GLOBAL_ILLUMINATION_DIRECTION_OPTIONS.includes(numeric) ? numeric : fallback;
+}
+
 function normalizeFloorMode(value, fallback = THEME_FLOOR_MODES.STAGE) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "glass") {
@@ -1880,6 +1910,38 @@ export function normalizeThemeSettings(value = {}) {
         skyColor: normalizeColor(lighting.hemisphere?.skyColor, DEFAULT_THEME_SETTINGS.lighting.hemisphere.skyColor),
         groundColor: normalizeColor(lighting.hemisphere?.groundColor, DEFAULT_THEME_SETTINGS.lighting.hemisphere.groundColor),
         intensity: normalizeNumber(lighting.hemisphere?.intensity, DEFAULT_THEME_SETTINGS.lighting.hemisphere.intensity, 0, 20)
+      },
+      globalIllumination: {
+        enabled: normalizeBoolean(
+          lighting.globalIllumination?.enabled,
+          DEFAULT_THEME_SETTINGS.lighting.globalIllumination?.enabled ?? DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.enabled
+        ),
+        quality: normalizeGlobalIlluminationQuality(
+          lighting.globalIllumination?.quality,
+          DEFAULT_THEME_SETTINGS.lighting.globalIllumination?.quality ?? DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.quality
+        ),
+        directions: normalizeGlobalIlluminationDirections(
+          lighting.globalIllumination?.directions,
+          DEFAULT_THEME_SETTINGS.lighting.globalIllumination?.directions ?? DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.directions
+        ),
+        maxSamples: Math.round(normalizeNumber(
+          lighting.globalIllumination?.maxSamples,
+          DEFAULT_THEME_SETTINGS.lighting.globalIllumination?.maxSamples ?? DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.maxSamples,
+          0,
+          MAX_GLOBAL_ILLUMINATION_SAMPLES
+        )),
+        shadow: normalizeNumber(
+          lighting.globalIllumination?.shadow,
+          DEFAULT_THEME_SETTINGS.lighting.globalIllumination?.shadow ?? DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.shadow,
+          0,
+          1
+        ),
+        bounce: normalizeNumber(
+          lighting.globalIllumination?.bounce,
+          DEFAULT_THEME_SETTINGS.lighting.globalIllumination?.bounce ?? DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.bounce,
+          0,
+          2
+        )
       }
     }
   };

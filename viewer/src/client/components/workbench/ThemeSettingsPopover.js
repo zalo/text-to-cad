@@ -37,10 +37,14 @@ import { cn } from "@/ui/utils";
 import {
   CUSTOM_THEME_ID,
   DEFAULT_FILL_LIGHT_SETTINGS,
+  DEFAULT_GLOBAL_ILLUMINATION_SETTINGS,
   DEFAULT_RIM_LIGHT_SETTINGS,
   DEFAULT_THEME_ID,
   ENVIRONMENT_PRESETS,
   getThemePresetById,
+  GLOBAL_ILLUMINATION_DIRECTION_OPTIONS,
+  GLOBAL_ILLUMINATION_QUALITY_OPTIONS,
+  MAX_GLOBAL_ILLUMINATION_SAMPLES,
   MAX_THEME_FILL_COLORS,
   normalizeThemeSettings,
   resolveSystemThemePresetId,
@@ -111,6 +115,15 @@ const PRIMARY_LIGHT_FALLBACKS = Object.freeze({
 
 // Fill and rim colors are not mode-color paths, so they use a plain color field.
 const MODE_COLOR_LIGHT_KEYS = Object.freeze(["directional", "spot", "point"]);
+const GLOBAL_ILLUMINATION_QUALITY_SELECT_OPTIONS = GLOBAL_ILLUMINATION_QUALITY_OPTIONS.map((value) => ({
+  value,
+  label: value.charAt(0).toUpperCase() + value.slice(1)
+}));
+// Directions per bounce are square ArrayCamera layouts; label them as grids.
+const GLOBAL_ILLUMINATION_DIRECTION_SELECT_OPTIONS = GLOBAL_ILLUMINATION_DIRECTION_OPTIONS.map((value) => {
+  const side = Math.round(Math.sqrt(value));
+  return { value: String(value), label: `${side} × ${side}` };
+});
 
 const precisionSliderClasses = FILE_SHEET_PRECISION_SLIDER_CLASSES;
 const SLIDER_COMMIT_DELAY_MS = 120;
@@ -889,6 +902,8 @@ function ThemeSettingsContent({
   const activePrimaryLightSettings = themeSettings.lighting[activePrimaryLight] ||
     PRIMARY_LIGHT_FALLBACKS[activePrimaryLight] ||
     { enabled: false };
+  const globalIlluminationSettings = themeSettings.lighting.globalIllumination ||
+    DEFAULT_GLOBAL_ILLUMINATION_SETTINGS;
 
   const setMaterials = (patch) => {
     updateThemeSettings((current) => ({
@@ -1589,6 +1604,63 @@ function ThemeSettingsContent({
                 max={20}
                 step={0.01}
                 onChange={(nextValue) => setLightConfig("hemisphere", { intensity: nextValue })}
+              />
+            </SliderField>
+          </>
+        ) : null}
+      </ControlSubsection>
+
+      <ControlSubsection
+        title="Global illumination"
+        toggle={(
+          <SubsectionToggle
+            label="Enable global illumination"
+            checked={globalIlluminationSettings.enabled === true}
+            onCheckedChange={(nextValue) => setLightConfig("globalIllumination", { enabled: nextValue })}
+          />
+        )}
+      >
+        {globalIlluminationSettings.enabled === true ? (
+          <>
+            {/* Progressive radiosity: environment-lit soft shadows and contact
+                occlusion baked into a lightmap that refines over frames. */}
+            <FileSheetSelectRow
+              label="Quality"
+              value={globalIlluminationSettings.quality}
+              onValueChange={(nextValue) => setLightConfig("globalIllumination", { quality: nextValue })}
+              options={GLOBAL_ILLUMINATION_QUALITY_SELECT_OPTIONS}
+            />
+            <FileSheetSelectRow
+              label="Directions"
+              value={String(globalIlluminationSettings.directions)}
+              onValueChange={(nextValue) => setLightConfig("globalIllumination", { directions: Number(nextValue) })}
+              options={GLOBAL_ILLUMINATION_DIRECTION_SELECT_OPTIONS}
+            />
+            <SliderField label="Shadow" value={formatNumber(globalIlluminationSettings.shadow)}>
+              <SliderInput
+                value={globalIlluminationSettings.shadow}
+                min={0}
+                max={1}
+                step={0.01}
+                onChange={(nextValue) => setLightConfig("globalIllumination", { shadow: nextValue })}
+              />
+            </SliderField>
+            <SliderField label="Bounce" value={formatNumber(globalIlluminationSettings.bounce)}>
+              <SliderInput
+                value={globalIlluminationSettings.bounce}
+                min={0}
+                max={2}
+                step={0.01}
+                onChange={(nextValue) => setLightConfig("globalIllumination", { bounce: nextValue })}
+              />
+            </SliderField>
+            <SliderField label="Samples" value={formatNumber(globalIlluminationSettings.maxSamples, 0)}>
+              <SliderInput
+                value={globalIlluminationSettings.maxSamples}
+                min={500}
+                max={MAX_GLOBAL_ILLUMINATION_SAMPLES}
+                step={100}
+                onChange={(nextValue) => setLightConfig("globalIllumination", { maxSamples: nextValue })}
               />
             </SliderField>
           </>
