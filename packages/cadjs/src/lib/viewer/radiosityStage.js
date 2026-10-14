@@ -42,8 +42,14 @@ const FLOOR_ATLAS_FRACTION = 0.5;
 /** Chart gutter (texels) on each side. */
 const PADDING = 2;
 
-/** Pre-blur (PMREM roughness) applied to the environment for the bake. */
+/** Pre-blur (PMREM roughness) applied to an environment map for the bake. */
 const ENVIRONMENT_BLUR = 0.25;
+/**
+ * Pre-blur for the procedural room: fully diffuse-convolved, so the room's few
+ * overhead panels become a smooth all-around sky with a mild top bias and the
+ * baked shadows are omnidirectional contact shadows rather than cast shadows.
+ */
+const ROOM_ENVIRONMENT_BLUR = 1;
 
 const UP = new THREE.Vector3(0, 0, 1);
 
@@ -179,7 +185,7 @@ export class RadiosityStage {
     this._topologyHash = 0;
     this._info = null;
     this._disposed = false;
-    this._environment = { texture: null, rotation: new THREE.Euler(), intensity: 1 };
+    this._environment = { texture: null, rotation: new THREE.Euler(), intensity: 1, blur: ENVIRONMENT_BLUR };
     this._pmremGenerator = null;
     this._roomPmrem = null;
     this._createSolver();
@@ -297,16 +303,17 @@ export class RadiosityStage {
     const sameRotation = nextRotation
       ? env.rotation.equals(nextRotation)
       : env.rotation.x === 0 && env.rotation.y === 0 && env.rotation.z === 0;
-    if (env.texture === nextTexture && env.intensity === nextIntensity && sameRotation) {
+    if (env.texture === nextTexture && env.intensity === nextIntensity && sameRotation && env.blur === ENVIRONMENT_BLUR) {
       return;
     }
     env.texture = nextTexture;
+    env.blur = ENVIRONMENT_BLUR;
     if (nextRotation) env.rotation.copy(nextRotation);
     else env.rotation.set(0, 0, 0);
     env.intensity = nextIntensity;
     this._displayUniforms.uRadIntensity.value = env.intensity;
     this._displayUniforms.uRadReplaceAmbient.value = 0;
-    this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR);
+    this._solver.setEnvironment(env.texture, env.rotation, env.blur);
   }
 
   /**
@@ -333,10 +340,11 @@ export class RadiosityStage {
       luminance(ambient) * Math.max(Number(ambientIntensity) || 0, 0);
     const env = this._environment;
     const texture = this._roomPmrem?.texture || null;
-    if (env.texture !== texture) {
+    if (env.texture !== texture || env.blur !== ROOM_ENVIRONMENT_BLUR) {
       env.texture = texture;
+      env.blur = ROOM_ENVIRONMENT_BLUR;
       env.rotation.set(0, 0, 0);
-      this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR);
+      this._solver.setEnvironment(env.texture, env.rotation, env.blur);
     }
     const upIrradiance = this._solver.environmentUpIrradiance;
     env.intensity = upIrradiance > 1e-6 ? target / upIrradiance : target;
@@ -439,7 +447,7 @@ export class RadiosityStage {
       envSampling: s.envSampling,
       displayUniforms: this._displayUniforms
     });
-    this._solver.setEnvironment(this._environment.texture, this._environment.rotation, ENVIRONMENT_BLUR);
+    this._solver.setEnvironment(this._environment.texture, this._environment.rotation, this._environment.blur);
     previous?.dispose();
     this._needsBuild = true;
   }
