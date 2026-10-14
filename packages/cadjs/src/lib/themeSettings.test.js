@@ -523,7 +523,7 @@ test("global illumination normalizes to the shared defaults and clamps overrides
     quality: "medium",
     directions: 16,
     maxSamples: 4000,
-    shadow: 0.8,
+    shadow: 1,
     bounce: 1
   });
   for (const preset of THEME_PRESETS) {

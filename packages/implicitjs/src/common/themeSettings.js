@@ -280,7 +280,7 @@ export const DEFAULT_GLOBAL_ILLUMINATION_SETTINGS = Object.freeze({
   quality: "medium",
   directions: 16,
   maxSamples: MAX_GLOBAL_ILLUMINATION_SAMPLES,
-  shadow: 0.8,
+  shadow: 1,
   bounce: 1
 });
 

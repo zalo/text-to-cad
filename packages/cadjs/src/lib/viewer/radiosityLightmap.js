@@ -448,7 +448,14 @@ export function createRadiosityDisplayUniforms() {
     /** 0..1 shadow/AO strength relative to the unoccluded irradiance. */
     uRadShadow: { value: 1 },
     /** Scale of the lightmap irradiance for materials without an environment map. */
-    uRadIntensity: { value: 1 }
+    uRadIntensity: { value: 1 },
+    /**
+     * 1 when the lightmap was baked against a synthetic sky made from the
+     * scene's hemisphere/ambient lights: those lights then fade out as the
+     * lightmap fades in (it carries their occluded, bounced version). 0 when an
+     * environment map lights the bake: the lights are only occluded.
+     */
+    uRadReplaceAmbient: { value: 0 }
   };
 }
 
@@ -471,9 +478,10 @@ const LIGHTS_MAPS_PATCH = /* glsl */ `
       #endif
       iblIrradiance = mix( iblIrradiance, lmIrradiance, uRadWeight );
       tcvRadVisibility = mix( 1.0, 1.0 - uRadShadow * ( 1.0 - clamp( lmLum / lm.a, 0.0, 1.0 ) ), uRadWeight );
-      // Ambient and hemisphere lights are unoccluded by construction; scale
-      // them by the baked visibility so they do not wash the occlusion out.
-      irradiance *= tcvRadVisibility;
+      // Ambient and hemisphere lights are unoccluded by construction: either
+      // scale them by the baked visibility, or hand over to the lightmap when
+      // it was baked against a sky made from these very lights.
+      irradiance *= mix( tcvRadVisibility, 1.0 - uRadWeight, uRadReplaceAmbient );
     }
   }
   #endif
@@ -530,10 +538,11 @@ export function applyRadiosityPatch(material, lightmap, uniforms) {
       shader.uniforms.uRadWeight = uniforms.uRadWeight;
       shader.uniforms.uRadShadow = uniforms.uRadShadow;
       shader.uniforms.uRadIntensity = uniforms.uRadIntensity;
+      shader.uniforms.uRadReplaceAmbient = uniforms.uRadReplaceAmbient;
       shader.fragmentShader = shader.fragmentShader
         .replace(
           "#include <common>",
-          "#include <common>\nuniform float uRadWeight;\nuniform float uRadShadow;\nuniform float uRadIntensity;\nfloat tcvRadVisibility = 1.0;"
+          "#include <common>\nuniform float uRadWeight;\nuniform float uRadShadow;\nuniform float uRadIntensity;\nuniform float uRadReplaceAmbient;\nfloat tcvRadVisibility = 1.0;"
         )
         .replace("#include <lights_fragment_maps>", LIGHTS_MAPS_PATCH)
         .replace("#include <aomap_fragment>", AOMAP_PATCH);

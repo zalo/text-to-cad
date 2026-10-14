@@ -764,13 +764,21 @@ function syncRuntimeRadiosity(runtime, context) {
     stage.setFloor(null);
   }
   // Light source: the environment map (PMREM shared with the display
-  // materials). Without one the bake is a pure occlusion term over a white
-  // sky, which still darkens the ambient/hemisphere lights and the floor.
+  // materials), or a synthetic hemisphere sky when there is none.
   const environment = context.themeSettings?.environment;
   if (environment?.enabled && runtime.environmentPmrem?.texture) {
     stage.setEnvironment(runtime.environmentPmrem.texture, null, 1);
   } else {
-    stage.setEnvironment(null, null, 0);
+    // No environment map: bake against a sky made from the hemisphere and
+    // ambient lights so their occlusion and bounce come from the lightmap.
+    const lighting = context.themeSettings?.lighting || {};
+    stage.setHemisphereEnvironment({
+      skyColor: lighting.hemisphere?.skyColor,
+      groundColor: lighting.hemisphere?.groundColor,
+      hemisphereIntensity: lighting.hemisphere?.enabled ? lighting.hemisphere.intensity : 0,
+      ambientColor: lighting.ambient?.color,
+      ambientIntensity: lighting.ambient?.enabled ? lighting.ambient.intensity : 0
+    });
   }
   runtime.requestRender();
 }

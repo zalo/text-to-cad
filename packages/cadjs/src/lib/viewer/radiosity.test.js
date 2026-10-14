@@ -21,7 +21,7 @@ import {
 } from "./radiosityStage.js";
 
 function uniforms() {
-  return { uRadWeight: { value: 1 }, uRadShadow: { value: 0.5 }, uRadIntensity: { value: 1 } };
+  return { uRadWeight: { value: 1 }, uRadShadow: { value: 0.5 }, uRadIntensity: { value: 1 }, uRadReplaceAmbient: { value: 0 } };
 }
 
 function shaderStub() {
@@ -57,7 +57,7 @@ test("applyRadiosityPatch attaches the lightmap and chains the edge shader hook"
   assert.ok(shader.uniforms.uRadIntensity);
   assert.ok(!shader.fragmentShader.includes("#include <lights_fragment_maps>"));
   assert.ok(shader.fragmentShader.includes("tcvRadVisibility"));
-  assert.ok(shader.fragmentShader.includes("irradiance *= tcvRadVisibility"));
+  assert.ok(shader.fragmentShader.includes("irradiance *= mix( tcvRadVisibility, 1.0 - uRadWeight, uRadReplaceAmbient )"));
   assert.ok(shader.fragmentShader.includes("#include <aomap_fragment>"));
 });
 

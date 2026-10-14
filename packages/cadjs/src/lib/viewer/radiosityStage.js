@@ -124,7 +124,7 @@ export const DEFAULT_RADIOSITY_STAGE_SETTINGS = Object.freeze({
   quality: "medium",
   directions: 16,
   maxSamples: 4000,
-  shadow: 0.8,
+  shadow: 1,
   bounce: 1,
   envSampling: "importance",
   selfBias: 1.5
@@ -175,6 +175,9 @@ export class RadiosityStage {
     this._info = null;
     this._disposed = false;
     this._environment = { texture: null, rotation: new THREE.Euler(), intensity: 1 };
+    this._pmremGenerator = null;
+    this._skyPmrem = null;
+    this._skyKey = "";
     this._createSolver();
   }
 
@@ -298,7 +301,93 @@ export class RadiosityStage {
     else env.rotation.set(0, 0, 0);
     env.intensity = nextIntensity;
     this._displayUniforms.uRadIntensity.value = env.intensity;
+    this._displayUniforms.uRadReplaceAmbient.value = 0;
     this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR);
+  }
+
+  /**
+   * Light the bake with a synthetic sky built from the scene's hemisphere and
+   * ambient lights (for themes without an environment map). The lightmap then
+   * carries those lights' occluded, bounced contribution and the display
+   * materials fade the plain lights out as it fades in. Z is up.
+   *
+   * @param {object} params
+   * @param {THREE.Color|string} params.skyColor
+   * @param {THREE.Color|string} params.groundColor
+   * @param {number} params.hemisphereIntensity - 0 disables the hemisphere term
+   * @param {THREE.Color|string} params.ambientColor
+   * @param {number} params.ambientIntensity - 0 disables the ambient term
+   */
+  setHemisphereEnvironment({ skyColor, groundColor, hemisphereIntensity = 0, ambientColor, ambientIntensity = 0 } = {}) {
+    const hemi = Math.max(Number(hemisphereIntensity) || 0, 0);
+    const amb = Math.max(Number(ambientIntensity) || 0, 0);
+    const sky = new THREE.Color(skyColor || 0xffffff).multiplyScalar(hemi);
+    const ground = new THREE.Color(groundColor || 0x000000).multiplyScalar(hemi);
+    const ambient = new THREE.Color(ambientColor || 0xffffff).multiplyScalar(amb);
+    const key = [sky, ground, ambient].map((c) => `${c.r.toFixed(4)},${c.g.toFixed(4)},${c.b.toFixed(4)}`).join("|");
+    if (key !== this._skyKey || !this._skyPmrem) {
+      this._skyPmrem?.dispose();
+      this._skyPmrem = this._buildSkyPmrem(sky, ground, ambient);
+      this._skyKey = key;
+    }
+    const env = this._environment;
+    const texture = this._skyPmrem?.texture || null;
+    const same = env.texture === texture && env.intensity === 1 &&
+      this._displayUniforms.uRadReplaceAmbient.value === 1;
+    env.texture = texture;
+    env.rotation.set(0, 0, 0);
+    env.intensity = 1;
+    this._displayUniforms.uRadIntensity.value = 1;
+    this._displayUniforms.uRadReplaceAmbient.value = 1;
+    if (!same) {
+      this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR);
+    }
+  }
+
+  /**
+   * Equirectangular two-tone sky (sky above the Z=0 horizon, ground below,
+   * ambient everywhere), pre-filtered into a PMREM. Radiance is irradiance/π
+   * so a surface facing up receives exactly three's hemisphere-light value.
+   */
+  _buildSkyPmrem(sky, ground, ambient) {
+    const width = 64;
+    const height = 32;
+    const data = new Float32Array(width * height * 4);
+    const inv = 1 / Math.PI;
+    for (let j = 0; j < height; j++) {
+      // three's equirect convention: v = asin(dir.y) / π + 0.5; u = atan(dir.z, dir.x) / 2π + 0.5
+      const lat = ((j + 0.5) / height - 0.5) * Math.PI;
+      const r = Math.cos(lat);
+      for (let i = 0; i < width; i++) {
+        const lon = ((i + 0.5) / width - 0.5) * 2 * Math.PI;
+        const dirZ = r * Math.sin(lon);
+        const above = dirZ > 0;
+        const o = (j * width + i) * 4;
+        data[o] = ((above ? sky.r : ground.r) + ambient.r) * inv;
+        data[o + 1] = ((above ? sky.g : ground.g) + ambient.g) * inv;
+        data[o + 2] = ((above ? sky.b : ground.b) + ambient.b) * inv;
+        data[o + 3] = 1;
+      }
+    }
+    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.colorSpace = THREE.LinearSRGBColorSpace;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    if (!this._pmremGenerator) {
+      this._pmremGenerator = new THREE.PMREMGenerator(this._renderer);
+    }
+    let target = null;
+    try {
+      target = this._pmremGenerator.fromEquirectangular(texture);
+    } catch (error) {
+      console.warn("radiosity: hemisphere sky PMREM failed", error);
+    } finally {
+      texture.dispose();
+    }
+    return target;
   }
 
   /** Restart the accumulation (e.g. after a context restore). */
@@ -353,6 +442,10 @@ export class RadiosityStage {
     this._solver?.dispose();
     this._solver = null;
     this._floor.dispose();
+    this._skyPmrem?.dispose();
+    this._skyPmrem = null;
+    this._pmremGenerator?.dispose();
+    this._pmremGenerator = null;
   }
 
   // -------------------------------------------------------------------------
