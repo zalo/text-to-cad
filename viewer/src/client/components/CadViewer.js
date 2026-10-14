@@ -84,6 +84,7 @@ import {
   getViewerThemeValue,
   getStageFloorSize,
   normalizeFloorMode,
+  resolveBackgroundFloorColor,
   resolveStageFloorColor,
   resolveWireframeEdgeColor,
   updateSpotLightTarget
@@ -698,6 +699,11 @@ function syncRuntimeRadiosity(runtime, context) {
     runtime.softwareRendering !== true &&
     runtime.hasVisibleModel === true &&
     RadiosityStage.supported(runtime.renderer);
+  const groundMode = context.floorMode === THEME_FLOOR_MODES.STAGE
+    ? "stage"
+    : runtime.floorMode === THEME_FLOOR_MODES.GRID || context.floorMode === THEME_FLOOR_MODES.GRID
+      ? "grid"
+      : "none";
   if (!wanted) {
     if (runtime.radiosity) {
       runtime.radiosity.group.parent?.remove(runtime.radiosity.group);
@@ -727,11 +733,13 @@ function syncRuntimeRadiosity(runtime, context) {
     runtime.scene.add(stage.group);
   }
 
-  // The ground: the stage floor's plane, when there is one, both catches the
-  // baked shadows and bounces light back (its colour feeds the bounce).
+  // The ground: with a stage floor its plane both catches the baked shadows
+  // and bounces light back (its colour feeds the bounce); with only a grid the
+  // catcher darkens the backdrop under the model so it still reads as resting
+  // on the ground. No floor at all means a floating model.
   const bounds = runtime.modelBounds;
   const hasBounds = bounds && Array.isArray(bounds.min) && Array.isArray(bounds.max);
-  if (context.floorMode === THEME_FLOOR_MODES.STAGE && hasBounds) {
+  if (groundMode !== "none" && hasBounds) {
     const offset = runtime.modelGroup?.position;
     const center = new runtime.THREE.Vector3(
       (toNumber(bounds.min[0]) + toNumber(bounds.max[0])) / 2 + toNumber(offset?.x),
@@ -748,12 +756,13 @@ function syncRuntimeRadiosity(runtime, context) {
       center,
       level: toNumber(runtime.gridFloorZ),
       extent,
-      albedo: resolveStageFloorColor(runtime.THREE, context.viewerTheme, context.themeSettings)
+      albedo: groundMode === "stage"
+        ? resolveStageFloorColor(runtime.THREE, context.viewerTheme, context.themeSettings)
+        : resolveBackgroundFloorColor(runtime.THREE, context.themeSettings?.background, context.viewerTheme)
     });
   } else {
     stage.setFloor(null);
   }
-
   // Light source: the environment map (PMREM shared with the display
   // materials). Without one the bake is a pure occlusion term over a white
   // sky, which still darkens the ambient/hemisphere lights and the floor.
