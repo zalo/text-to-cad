@@ -34,6 +34,7 @@ import {
   removeRadiosityPatch
 } from "./radiosityLightmap.js";
 import { RadiosityFloor } from "./radiosityFloor.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 /** Fraction of the atlas side reserved for the floor's chart. */
 const FLOOR_ATLAS_FRACTION = 0.5;
@@ -45,6 +46,10 @@ const PADDING = 2;
 const ENVIRONMENT_BLUR = 0.25;
 
 const UP = new THREE.Vector3(0, 0, 1);
+
+function luminance(color) {
+  return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+}
 
 function worldVisible(obj) {
   let o = obj;
@@ -176,8 +181,7 @@ export class RadiosityStage {
     this._disposed = false;
     this._environment = { texture: null, rotation: new THREE.Euler(), intensity: 1 };
     this._pmremGenerator = null;
-    this._skyPmrem = null;
-    this._skyKey = "";
+    this._roomPmrem = null;
     this._createSolver();
   }
 
@@ -306,86 +310,60 @@ export class RadiosityStage {
   }
 
   /**
-   * Light the bake with a synthetic sky built from the scene's hemisphere and
-   * ambient lights (for themes without an environment map). The lightmap then
-   * carries those lights' occluded, bounced contribution and the display
-   * materials fade the plain lights out as it fades in. Z is up.
+   * Light the bake with three's procedural RoomEnvironment (for themes without
+   * an environment map), scaled so an unoccluded up-facing surface receives
+   * the irradiance the scene's hemisphere and ambient lights would have given
+   * it. The lightmap then carries those lights' occluded, bounced contribution
+   * and the display materials fade the plain lights out as it fades in.
    *
    * @param {object} params
    * @param {THREE.Color|string} params.skyColor
-   * @param {THREE.Color|string} params.groundColor
    * @param {number} params.hemisphereIntensity - 0 disables the hemisphere term
    * @param {THREE.Color|string} params.ambientColor
    * @param {number} params.ambientIntensity - 0 disables the ambient term
    */
-  setHemisphereEnvironment({ skyColor, groundColor, hemisphereIntensity = 0, ambientColor, ambientIntensity = 0 } = {}) {
-    const hemi = Math.max(Number(hemisphereIntensity) || 0, 0);
-    const amb = Math.max(Number(ambientIntensity) || 0, 0);
-    const sky = new THREE.Color(skyColor || 0xffffff).multiplyScalar(hemi);
-    const ground = new THREE.Color(groundColor || 0x000000).multiplyScalar(hemi);
-    const ambient = new THREE.Color(ambientColor || 0xffffff).multiplyScalar(amb);
-    const key = [sky, ground, ambient].map((c) => `${c.r.toFixed(4)},${c.g.toFixed(4)},${c.b.toFixed(4)}`).join("|");
-    if (key !== this._skyKey || !this._skyPmrem) {
-      this._skyPmrem?.dispose();
-      this._skyPmrem = this._buildSkyPmrem(sky, ground, ambient);
-      this._skyKey = key;
+  setRoomEnvironment({ skyColor, hemisphereIntensity = 0, ambientColor, ambientIntensity = 0 } = {}) {
+    if (!this._roomPmrem) {
+      this._roomPmrem = this._buildRoomPmrem();
     }
+    const sky = new THREE.Color(skyColor || 0xffffff);
+    const ambient = new THREE.Color(ambientColor || 0xffffff);
+    // three's irradiance for an up-facing surface: skyColor·I_hemi + ambient·I_amb.
+    const target = luminance(sky) * Math.max(Number(hemisphereIntensity) || 0, 0) +
+      luminance(ambient) * Math.max(Number(ambientIntensity) || 0, 0);
     const env = this._environment;
-    const texture = this._skyPmrem?.texture || null;
-    const same = env.texture === texture && env.intensity === 1 &&
-      this._displayUniforms.uRadReplaceAmbient.value === 1;
-    env.texture = texture;
-    env.rotation.set(0, 0, 0);
-    env.intensity = 1;
-    this._displayUniforms.uRadIntensity.value = 1;
-    this._displayUniforms.uRadReplaceAmbient.value = 1;
-    if (!same) {
+    const texture = this._roomPmrem?.texture || null;
+    if (env.texture !== texture) {
+      env.texture = texture;
+      env.rotation.set(0, 0, 0);
       this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR);
     }
+    const upIrradiance = this._solver.environmentUpIrradiance;
+    env.intensity = upIrradiance > 1e-6 ? target / upIrradiance : target;
+    this._displayUniforms.uRadIntensity.value = env.intensity;
+    this._displayUniforms.uRadReplaceAmbient.value = 1;
   }
 
-  /**
-   * Equirectangular two-tone sky (sky above the Z=0 horizon, ground below,
-   * ambient everywhere), pre-filtered into a PMREM. Radiance is irradiance/π
-   * so a surface facing up receives exactly three's hemisphere-light value.
-   */
-  _buildSkyPmrem(sky, ground, ambient) {
-    const width = 64;
-    const height = 32;
-    const data = new Float32Array(width * height * 4);
-    const inv = 1 / Math.PI;
-    for (let j = 0; j < height; j++) {
-      // three's equirect convention: v = asin(dir.y) / π + 0.5; u = atan(dir.z, dir.x) / 2π + 0.5
-      const lat = ((j + 0.5) / height - 0.5) * Math.PI;
-      const r = Math.cos(lat);
-      for (let i = 0; i < width; i++) {
-        const lon = ((i + 0.5) / width - 0.5) * 2 * Math.PI;
-        const dirZ = r * Math.sin(lon);
-        const above = dirZ > 0;
-        const o = (j * width + i) * 4;
-        data[o] = ((above ? sky.r : ground.r) + ambient.r) * inv;
-        data[o + 1] = ((above ? sky.g : ground.g) + ambient.g) * inv;
-        data[o + 2] = ((above ? sky.b : ground.b) + ambient.b) * inv;
-        data[o + 3] = 1;
-      }
-    }
-    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
-    texture.mapping = THREE.EquirectangularReflectionMapping;
-    texture.colorSpace = THREE.LinearSRGBColorSpace;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.generateMipmaps = false;
-    texture.needsUpdate = true;
+  /** PMREM of three's RoomEnvironment, rotated so its ceiling faces +Z. */
+  _buildRoomPmrem() {
     if (!this._pmremGenerator) {
       this._pmremGenerator = new THREE.PMREMGenerator(this._renderer);
     }
+    const room = new RoomEnvironment();
+    // The room is authored Y-up; the viewer's scenes are Z-up.
+    room.rotation.x = Math.PI / 2;
+    room.updateMatrixWorld(true);
     let target = null;
     try {
-      target = this._pmremGenerator.fromEquirectangular(texture);
+      target = this._pmremGenerator.fromScene(room, 0.04);
     } catch (error) {
-      console.warn("radiosity: hemisphere sky PMREM failed", error);
+      console.warn("radiosity: room environment PMREM failed", error);
     } finally {
-      texture.dispose();
+      room.traverse((object) => {
+        object.geometry?.dispose?.();
+        if (Array.isArray(object.material)) object.material.forEach((m) => m.dispose?.());
+        else object.material?.dispose?.();
+      });
     }
     return target;
   }
@@ -442,8 +420,8 @@ export class RadiosityStage {
     this._solver?.dispose();
     this._solver = null;
     this._floor.dispose();
-    this._skyPmrem?.dispose();
-    this._skyPmrem = null;
+    this._roomPmrem?.dispose();
+    this._roomPmrem = null;
     this._pmremGenerator?.dispose();
     this._pmremGenerator = null;
   }

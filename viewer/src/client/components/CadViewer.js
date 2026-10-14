@@ -764,17 +764,17 @@ function syncRuntimeRadiosity(runtime, context) {
     stage.setFloor(null);
   }
   // Light source: the environment map (PMREM shared with the display
-  // materials), or a synthetic hemisphere sky when there is none.
+  // materials), or three's procedural room environment when there is none.
   const environment = context.themeSettings?.environment;
   if (environment?.enabled && runtime.environmentPmrem?.texture) {
     stage.setEnvironment(runtime.environmentPmrem.texture, null, 1);
   } else {
-    // No environment map: bake against a sky made from the hemisphere and
-    // ambient lights so their occlusion and bounce come from the lightmap.
+    // No environment map: bake against three's procedural room environment,
+    // scaled to the hemisphere/ambient lights, so their occlusion and bounce
+    // come from the lightmap.
     const lighting = context.themeSettings?.lighting || {};
-    stage.setHemisphereEnvironment({
+    stage.setRoomEnvironment({
       skyColor: lighting.hemisphere?.skyColor,
-      groundColor: lighting.hemisphere?.groundColor,
       hemisphereIntensity: lighting.hemisphere?.enabled ? lighting.hemisphere.intensity : 0,
       ambientColor: lighting.ambient?.color,
       ambientIntensity: lighting.ambient?.enabled ? lighting.ambient.intensity : 0

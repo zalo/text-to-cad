@@ -171,3 +171,14 @@ test("normalizeRadiosityStageSettings clamps and falls back", () => {
   assert.equal(normalized.bounce, 1);
   assert.equal(normalized.envSampling, "uniform");
 });
+
+test("integrateUpIrradiance of a uniform unit sky is π", async () => {
+  const { integrateUpIrradiance } = await import("./radiosityLightmap.js");
+  const w = 128;
+  const h = 64;
+  const lum = new Float32Array(w * h).fill(1);
+  assert.ok(Math.abs(integrateUpIrradiance(lum, w, h) - Math.PI) < 1e-2);
+  // Light only below the horizon contributes nothing to an up-facing surface.
+  for (let i = 0; i < h / 2; i++) for (let j = 0; j < w; j++) lum[i * w + j] = 0;
+  assert.ok(Math.abs(integrateUpIrradiance(lum, w, h)) < 1e-6);
+});

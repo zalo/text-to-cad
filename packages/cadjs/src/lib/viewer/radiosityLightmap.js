@@ -418,6 +418,24 @@ export class EnvImportanceTable {
   }
 }
 
+/**
+ * Luminance irradiance an unoccluded, up-facing (+Z) surface receives from an
+ * equirectangular luminance table (polar axis +Z, row = theta): ∫ L cosθ dω.
+ */
+export function integrateUpIrradiance(lum, w, h) {
+  const dTheta = Math.PI / h;
+  const dPhi = (2 * Math.PI) / w;
+  let sum = 0;
+  for (let i = 0; i < h; i++) {
+    const theta = (i + 0.5) * dTheta;
+    const cosT = Math.cos(theta);
+    if (cosT <= 0) break;
+    const weight = cosT * Math.sin(theta) * dTheta * dPhi;
+    for (let j = 0; j < w; j++) sum += Math.max(lum[i * w + j], 0) * weight;
+  }
+  return sum;
+}
+
 /** First index in [lo, hi) whose cdf value is >= u. */
 function lowerBound(cdf, lo, hi, u) {
   while (lo < hi) {
@@ -709,6 +727,8 @@ export class RadiosityLightmap {
     this._needsClear = true;
     this._envTable = null;
     this._envTableRT = null;
+    /** Luminance irradiance of an unoccluded up-facing texel at unit environment intensity. */
+    this.environmentUpIrradiance = 0;
     this._gatherCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
     const mapOpts = {
@@ -1009,6 +1029,7 @@ export class RadiosityLightmap {
    */
   _buildEnvTable() {
     this._envTable = null;
+    this.environmentUpIrradiance = 0;
     if (!this._envTexture || this._envHeight === 0 || this._disposed) return;
     const renderer = this._renderer;
     if (!this._envTableRT) {
@@ -1051,6 +1072,7 @@ export class RadiosityLightmap {
         lum[i] = 0.2126 * buf[i * 4] + 0.7152 * buf[i * 4 + 1] + 0.0722 * buf[i * 4 + 2];
       }
       this._envTable = new EnvImportanceTable(lum, ENV_TABLE_W, ENV_TABLE_H);
+      this.environmentUpIrradiance = integrateUpIrradiance(lum, ENV_TABLE_W, ENV_TABLE_H);
     } catch (error) {
       console.warn("radiosity: environment table failed, uniform sampling", error);
       this._envTable = null;
