@@ -524,7 +524,7 @@ test("global illumination normalizes to the shared defaults and clamps overrides
     directions: 16,
     maxSamples: 4000,
     shadow: 1,
-    bounce: 1
+    bounce: 0
   });
   for (const preset of THEME_PRESETS) {
     assert.deepEqual(

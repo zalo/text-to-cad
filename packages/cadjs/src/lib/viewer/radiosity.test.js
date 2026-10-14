@@ -168,7 +168,7 @@ test("normalizeRadiosityStageSettings clamps and falls back", () => {
   assert.equal(normalized.directions, 16);
   assert.equal(normalized.maxSamples, 0);
   assert.equal(normalized.shadow, 1);
-  assert.equal(normalized.bounce, 1);
+  assert.equal(normalized.bounce, 0);
   assert.equal(normalized.envSampling, "uniform");
 });
 

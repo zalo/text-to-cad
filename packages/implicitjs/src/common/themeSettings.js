@@ -281,7 +281,7 @@ export const DEFAULT_GLOBAL_ILLUMINATION_SETTINGS = Object.freeze({
   directions: 16,
   maxSamples: MAX_GLOBAL_ILLUMINATION_SAMPLES,
   shadow: 1,
-  bounce: 1
+  bounce: 0
 });
 
 function normalizeGlobalIlluminationQuality(value, fallback = DEFAULT_GLOBAL_ILLUMINATION_SETTINGS.quality) {

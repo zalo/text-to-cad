@@ -50,6 +50,12 @@ const ENVIRONMENT_BLUR = 0.25;
  * lights every side of the scene alike while keeping the panels sharp.
  */
 const ROOM_ENVIRONMENT_SYMMETRY = 4;
+/**
+ * The room below the horizon is blacked out for the bake: the ground's
+ * contribution to the model comes from the shadow-catching floor's bounce,
+ * not from the room's lit lower walls.
+ */
+const ROOM_BELOW_HORIZON = 0;
 
 const UP = new THREE.Vector3(0, 0, 1);
 
@@ -136,7 +142,9 @@ export const DEFAULT_RADIOSITY_STAGE_SETTINGS = Object.freeze({
   directions: 16,
   maxSamples: 4000,
   shadow: 1,
-  bounce: 1,
+  // Direct environment light only by default; the Bounce control adds
+  // indirect light from the model and floor.
+  bounce: 0,
   envSampling: "importance",
   selfBias: 1.5
 });
@@ -313,7 +321,7 @@ export class RadiosityStage {
     env.intensity = nextIntensity;
     this._displayUniforms.uRadIntensity.value = env.intensity;
     this._displayUniforms.uRadReplaceAmbient.value = 0;
-    this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR, env.symmetry);
+    this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR, env.symmetry, 1);
   }
 
   /**
@@ -344,7 +352,7 @@ export class RadiosityStage {
       env.texture = texture;
       env.symmetry = ROOM_ENVIRONMENT_SYMMETRY;
       env.rotation.set(0, 0, 0);
-      this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR, env.symmetry);
+      this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR, env.symmetry, ROOM_BELOW_HORIZON);
     }
     const upIrradiance = this._solver.environmentUpIrradiance;
     env.intensity = upIrradiance > 1e-6 ? target / upIrradiance : target;
@@ -458,7 +466,13 @@ export class RadiosityStage {
       envSampling: s.envSampling,
       displayUniforms: this._displayUniforms
     });
-    this._solver.setEnvironment(this._environment.texture, this._environment.rotation, ENVIRONMENT_BLUR, this._environment.symmetry);
+    this._solver.setEnvironment(
+      this._environment.texture,
+      this._environment.rotation,
+      ENVIRONMENT_BLUR,
+      this._environment.symmetry,
+      this._environment.symmetry === ROOM_ENVIRONMENT_SYMMETRY ? ROOM_BELOW_HORIZON : 1
+    );
     previous?.dispose();
     this._needsBuild = true;
   }

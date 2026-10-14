@@ -126,6 +126,9 @@ const GLSL_ENV = /* glsl */ `
   uniform mat3 uEnvRotation;
   uniform float uEnvBlur;
   uniform vec3 uEnvUp;
+  // Multiplier for directions below the horizon (1 = unchanged, 0 = black),
+  // with a narrow soft band around the horizon.
+  uniform float uEnvBelowHorizon;
   #ifndef TCV_ENV_SYMMETRY
     #define TCV_ENV_SYMMETRY 1
   #endif
@@ -149,10 +152,12 @@ const GLSL_ENV = /* glsl */ `
           vec3 dr = d * c + cross( uEnvUp, d ) * sn + uEnvUp * dot( uEnvUp, d ) * ( 1.0 - c );
           acc += tcvEnvSample( dr );
         }
-        return acc / float( TCV_ENV_SYMMETRY );
+        acc /= float( TCV_ENV_SYMMETRY );
       #else
-        return tcvEnvSample( d );
+        vec3 acc = tcvEnvSample( d );
       #endif
+      float horizon = smoothstep( -0.08, 0.08, dot( d, uEnvUp ) );
+      return acc * mix( uEnvBelowHorizon, 1.0, horizon );
     }
   #else
     vec3 tcvEnvRadiance( vec3 d ) { return vec3( 1.0 ); }
@@ -744,6 +749,7 @@ export class RadiosityLightmap {
     this._envRotation = new THREE.Matrix3();
     this._envBlur = 0.1;
     this._envSymmetry = 1;
+    this._envBelowHorizon = 1;
     this._envHeight = 0;
     this._disposed = false;
     this._lateral = 1;
@@ -929,10 +935,12 @@ export class RadiosityLightmap {
    * white sky), its rotation (the scene's `environmentRotation`), a pre-blur
    * roughness that softens small bright sources (0 = sharp) and an optional
    * N-fold symmetry about the up axis (the environment is averaged over N
-   * rotations so every side of the scene is lit alike).
+   * rotations so every side of the scene is lit alike) and a multiplier for
+   * the environment below the horizon (1 = as is, 0 = black).
    */
-  setEnvironment(texture, rotation, blur, symmetry = 1) {
+  setEnvironment(texture, rotation, blur, symmetry = 1, belowHorizon = 1) {
     const height = texture?.image?.height ?? 0;
+    this._envBelowHorizon = Math.min(Math.max(Number(belowHorizon) || 0, 0), 1);
     const hadEnv = this._envTexture !== null;
     const nextSymmetry = Math.max(1, Math.floor(Number(symmetry) || 1));
     const symmetryChanged = nextSymmetry !== this._envSymmetry;
@@ -957,6 +965,7 @@ export class RadiosityLightmap {
     const u = this._gatherMaterial.uniforms;
     u.uEnvRotation.value.copy(this._envRotation);
     u.uEnvBlur.value = blur;
+    u.uEnvBelowHorizon.value = this._envBelowHorizon;
     if (u.envMap) u.envMap.value = this._envTexture;
     this._buildEnvTable();
     this.reset();
@@ -1080,7 +1089,8 @@ export class RadiosityLightmap {
         envMap: { value: this._envTexture },
         uEnvRotation: { value: gu.uEnvRotation.value },
         uEnvBlur: { value: this._envBlur },
-        uEnvUp: { value: gu.uEnvUp.value }
+        uEnvUp: { value: gu.uEnvUp.value },
+        uEnvBelowHorizon: { value: this._envBelowHorizon }
       },
       defines: { ...this._gatherMaterial.defines },
       depthTest: false,
@@ -1180,7 +1190,8 @@ export class RadiosityLightmap {
       uFloorRefUv: { value: new THREE.Vector2(0, 0) },
       uEnvRotation: { value: new THREE.Matrix3() },
       uEnvBlur: { value: this._envBlur },
-      uEnvUp: { value: this._up.clone() }
+      uEnvUp: { value: this._up.clone() },
+      uEnvBelowHorizon: { value: this._envBelowHorizon }
     };
     if (defines.TCV_HAS_ENV) {
       defines.TCV_ENV_SYMMETRY = this._envSymmetry;
