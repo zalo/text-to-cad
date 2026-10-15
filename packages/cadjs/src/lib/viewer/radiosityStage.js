@@ -149,6 +149,45 @@ export const DEFAULT_RADIOSITY_STAGE_SETTINGS = Object.freeze({
   selfBias: 1.5
 });
 
+/**
+ * Irradiance an unoccluded surface facing `up` receives from a theme's plain
+ * lights (directional key/fill/rim, hemisphere sky and ambient), in three's
+ * physically-correct light units. Used to scale the procedural room
+ * environment so image-based lighting alone matches the theme's exposure.
+ * Positional spot/point lights are ignored (their contribution depends on
+ * the distance to the model).
+ *
+ * @param {object} lighting - normalized theme `lighting` block
+ * @param {THREE.Vector3} [up]
+ * @returns {number}
+ */
+export function themeLightsUpIrradiance(lighting = {}, up = UP) {
+  const source = lighting && typeof lighting === "object" ? lighting : {};
+  const intensityOf = (light) => {
+    if (!light || light.enabled === false) return 0;
+    const intensity = Number(light.intensity);
+    return Number.isFinite(intensity) && intensity > 0 ? intensity : 0;
+  };
+  const colorLum = (value) => luminance(new THREE.Color(value ?? 0xffffff));
+  const direction = new THREE.Vector3();
+  let total = 0;
+  for (const key of ["directional", "fill", "rim"]) {
+    const light = source[key];
+    const intensity = intensityOf(light);
+    if (!intensity) continue;
+    const position = light.position || {};
+    direction.set(Number(position.x) || 0, Number(position.y) || 0, Number(position.z) || 0);
+    if (direction.lengthSq() < 1e-12) continue;
+    direction.normalize();
+    total += colorLum(light.color) * intensity * Math.max(direction.dot(up), 0);
+  }
+  const hemisphere = source.hemisphere;
+  total += colorLum(hemisphere?.skyColor) * intensityOf(hemisphere);
+  const ambient = source.ambient;
+  total += colorLum(ambient?.color) * intensityOf(ambient);
+  return total;
+}
+
 export function normalizeRadiosityStageSettings(settings = {}) {
   const source = settings && typeof settings === "object" ? settings : {};
   const number = (value, fallback, min, max) => {
@@ -327,25 +366,19 @@ export class RadiosityStage {
   /**
    * Light the bake with three's procedural RoomEnvironment (for themes without
    * an environment map), scaled so an unoccluded up-facing surface receives
-   * the irradiance the scene's hemisphere and ambient lights would have given
-   * it. The lightmap then carries those lights' occluded, bounced contribution
-   * and the display materials fade the plain lights out as it fades in.
+   * `upIrradiance` (see `themeLightsUpIrradiance`). Display materials should
+   * use the same PMREM (`environmentTexture`) at `environmentIntensity` so the
+   * lightmap, the fade-in IBL and the specular reflections agree.
    *
    * @param {object} params
-   * @param {THREE.Color|string} params.skyColor
-   * @param {number} params.hemisphereIntensity - 0 disables the hemisphere term
-   * @param {THREE.Color|string} params.ambientColor
-   * @param {number} params.ambientIntensity - 0 disables the ambient term
+   * @param {number} params.upIrradiance - target irradiance of an unoccluded
+   *   up-facing surface, in three's light units
    */
-  setRoomEnvironment({ skyColor, hemisphereIntensity = 0, ambientColor, ambientIntensity = 0 } = {}) {
+  setRoomEnvironment({ upIrradiance = 1 } = {}) {
     if (!this._roomPmrem) {
       this._roomPmrem = this._buildRoomPmrem();
     }
-    const sky = new THREE.Color(skyColor || 0xffffff);
-    const ambient = new THREE.Color(ambientColor || 0xffffff);
-    // three's irradiance for an up-facing surface: skyColor·I_hemi + ambient·I_amb.
-    const target = luminance(sky) * Math.max(Number(hemisphereIntensity) || 0, 0) +
-      luminance(ambient) * Math.max(Number(ambientIntensity) || 0, 0);
+    const target = Math.max(Number(upIrradiance) || 0, 0);
     const env = this._environment;
     const texture = this._roomPmrem?.texture || null;
     if (env.texture !== texture || env.symmetry !== ROOM_ENVIRONMENT_SYMMETRY) {
@@ -354,10 +387,32 @@ export class RadiosityStage {
       env.rotation.set(0, 0, 0);
       this._solver.setEnvironment(env.texture, env.rotation, ENVIRONMENT_BLUR, env.symmetry, ROOM_BELOW_HORIZON);
     }
-    const upIrradiance = this._solver.environmentUpIrradiance;
-    env.intensity = upIrradiance > 1e-6 ? target / upIrradiance : target;
+    const unit = this._solver.environmentUpIrradiance;
+    env.intensity = unit > 1e-6 ? target / unit : target;
     this._displayUniforms.uRadIntensity.value = env.intensity;
-    this._displayUniforms.uRadReplaceAmbient.value = 1;
+    this._displayUniforms.uRadReplaceAmbient.value = 0;
+  }
+
+  /** PMREM texture lighting the bake (the theme's or the procedural room). */
+  get environmentTexture() {
+    return this._environment.texture;
+  }
+
+  /**
+   * Scale at which `environmentTexture` reproduces the bake's light levels
+   * (an `envMapIntensity` for the display materials). 1 for a theme map.
+   */
+  get environmentIntensity() {
+    return this._environment.intensity;
+  }
+
+  /**
+   * Irradiance an unoccluded up-facing surface receives from
+   * `environmentTexture` at unit intensity (three's light units), or 0
+   * without an environment.
+   */
+  get environmentUpIrradiance() {
+    return this._solver?.environmentUpIrradiance || 0;
   }
 
   /**

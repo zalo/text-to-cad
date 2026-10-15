@@ -89,7 +89,7 @@ import {
   resolveWireframeEdgeColor,
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
-import { RadiosityStage } from "cadjs/lib/viewer/radiosityStage";
+import { RadiosityStage, themeLightsUpIrradiance } from "cadjs/lib/viewer/radiosityStage";
 import {
   updateGridHelper as updateStageGridHelper,
   updateOriginAxis as updateStageOriginAxis
@@ -683,12 +683,54 @@ function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ 
   }
 }
 
+// Theme light visibility. While global illumination runs the scene is lit by
+// image-based lighting only: the plain lights (key/fill/rim/spot/point and the
+// unoccluded hemisphere/ambient terms) are hidden and the environment map, or
+// the procedural room standing in for one, carries all the light through the
+// lightmap and the materials' IBL.
+function applyThemeLightVisibility(runtime, lighting = {}, iblOnly = false) {
+  const enabled = (light) => !iblOnly && light?.enabled === true;
+  const enabledAndLit = (light) => enabled(light) && (Number(light.intensity) || 0) > 0.0001;
+  if (runtime.hemisphereLight) runtime.hemisphereLight.visible = enabled(lighting.hemisphere);
+  if (runtime.ambientLight) runtime.ambientLight.visible = enabled(lighting.ambient);
+  if (runtime.keyLight) {
+    runtime.keyLight.visible = enabled(lighting.directional);
+    // Keep a single primary shadow; the spot light drives the floor glow/fill.
+    runtime.keyLight.castShadow = runtime.keyLight.visible && runtime.softwareRendering !== true;
+  }
+  if (runtime.fillLight) runtime.fillLight.visible = enabledAndLit(lighting.fill);
+  if (runtime.rimLight) runtime.rimLight.visible = enabledAndLit(lighting.rim);
+  if (runtime.spotLight) {
+    runtime.spotLight.visible = enabled(lighting.spot);
+    runtime.spotLight.castShadow = false;
+  }
+  if (runtime.pointLight) runtime.pointLight.visible = enabled(lighting.point);
+}
+
+// The theme's envMapIntensity for the display materials (0 without a map).
+function themeEnvMapIntensity(themeSettings) {
+  const materials = themeSettings?.materials || {};
+  const environment = themeSettings?.environment || {};
+  return Math.max(Number(materials.envMapIntensity) || 0, 0) *
+    (environment.enabled ? Math.max(Number(environment.intensity) || 0, 0) : 0);
+}
+
+function applyRuntimeEnvMapIntensity(runtime, intensity) {
+  for (const record of runtime.displayRecords || []) {
+    const material = record?.material;
+    if (material && "envMapIntensity" in material) {
+      material.envMapIntensity = intensity;
+    }
+  }
+}
+
 // Progressive radiosity (theme `lighting.globalIllumination`): keeps one
 // RadiosityStage per runtime in step with the theme, the displayed model, the
 // stage floor and the environment. Called from the lighting, environment and
 // model effects; the render loop steps the stage every frame. The stage's
 // shadow catcher lives directly under the scene (not in stageGroup, which is
-// cleared and disposed on every stage rebuild).
+// cleared and disposed on every stage rebuild). While it runs, the scene is
+// lit by the environment alone (see applyThemeLightVisibility).
 function syncRuntimeRadiosity(runtime, context) {
   if (!runtime?.THREE || !runtime?.scene || !runtime?.renderer) {
     return;
@@ -704,15 +746,27 @@ function syncRuntimeRadiosity(runtime, context) {
     : runtime.floorMode === THEME_FLOOR_MODES.GRID || context.floorMode === THEME_FLOOR_MODES.GRID
       ? "grid"
       : "none";
+
+  const lighting = context?.themeSettings?.lighting || {};
+  const environment = context?.themeSettings?.environment;
+  const themePmremTexture = environment?.enabled ? runtime.environmentPmrem?.texture || null : null;
   if (!wanted) {
+    applyThemeLightVisibility(runtime, lighting, false);
     if (runtime.radiosity) {
       runtime.radiosity.group.parent?.remove(runtime.radiosity.group);
       runtime.radiosity.dispose();
       runtime.radiosity = null;
       runtime.requestRender();
     }
+    // Hand the plain lights and the theme's environment settings back.
+    if (runtime.scene.environment !== themePmremTexture) {
+      runtime.scene.environment = themePmremTexture;
+      runtime.requestRender();
+    }
+    applyRuntimeEnvMapIntensity(runtime, themeEnvMapIntensity(context?.themeSettings));
     return;
   }
+  applyThemeLightVisibility(runtime, lighting, true);
 
   const stageSettings = {
     quality: settings.quality,
@@ -763,23 +817,27 @@ function syncRuntimeRadiosity(runtime, context) {
   } else {
     stage.setFloor(null);
   }
-  // Light source: the environment map (PMREM shared with the display
+  // Light source: the theme's environment map (PMREM shared with the display
   // materials), or three's procedural room environment when there is none.
-  const environment = context.themeSettings?.environment;
-  if (environment?.enabled && runtime.environmentPmrem?.texture) {
-    stage.setEnvironment(runtime.environmentPmrem.texture, null, 1);
+  // The hidden plain lights hand their energy to the environment: the map is
+  // brightened so an unoccluded up-facing surface receives the irradiance
+  // they would have added, which keeps the theme's exposure. The same PMREM
+  // lights the display materials (fade-in IBL and specular), so the whole
+  // scene is image-based lit while the bake runs.
+  const lightsIrradiance = themeLightsUpIrradiance(lighting);
+  let envMapIntensity;
+  if (themePmremTexture) {
+    stage.setEnvironment(themePmremTexture, null, 1);
+    const unit = stage.environmentUpIrradiance;
+    envMapIntensity = themeEnvMapIntensity(context.themeSettings) + (unit > 1e-6 ? lightsIrradiance / unit : 0);
   } else {
-    // No environment map: bake against three's procedural room environment,
-    // scaled to the hemisphere/ambient lights, so their occlusion and bounce
-    // come from the lightmap.
-    const lighting = context.themeSettings?.lighting || {};
-    stage.setRoomEnvironment({
-      skyColor: lighting.hemisphere?.skyColor,
-      hemisphereIntensity: lighting.hemisphere?.enabled ? lighting.hemisphere.intensity : 0,
-      ambientColor: lighting.ambient?.color,
-      ambientIntensity: lighting.ambient?.enabled ? lighting.ambient.intensity : 0
-    });
+    stage.setRoomEnvironment({ upIrradiance: lightsIrradiance });
+    envMapIntensity = stage.environmentIntensity;
   }
+  if (runtime.scene.environment !== stage.environmentTexture) {
+    runtime.scene.environment = stage.environmentTexture;
+  }
+  applyRuntimeEnvMapIntensity(runtime, envMapIntensity);
   runtime.requestRender();
 }
 

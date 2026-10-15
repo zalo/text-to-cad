@@ -157,7 +157,7 @@ here rather than silently dropped.
 | `lighting.rim` | honoured | honoured (U4) |
 | `lighting.point` (bounce) | honoured | honoured |
 | `lighting.spot` | honoured | unsupported — no cone/attenuation term in the shader |
-| `lighting.globalIllumination` (radiosity) | honoured in the interactive viewer (progressive lightmap bake, `cadjs/lib/viewer/radiosityStage.js`); not applied by headless snapshots | unsupported — the raymarcher has no lightmap |
+| `lighting.globalIllumination` (radiosity) | honoured in the interactive viewer (progressive lightmap bake, `cadjs/lib/viewer/radiosityStage.js`; while enabled the plain lights are hidden and the environment map or procedural room is the only light source); not applied by headless snapshots | unsupported — the raymarcher has no lightmap |
 | `environment.intensity` | honoured (IBL) | approximated — folded into a flat white ambient term |
 | `environment.presetId` / reflections | honoured | unsupported — the shader samples no textures |
 | `materials.*` tint/saturation/contrast/brightness | honoured | honoured (shared `shapeSourceColor`) |

@@ -1623,7 +1623,10 @@ function ThemeSettingsContent({
         {globalIlluminationSettings.enabled === true ? (
           <>
             {/* Progressive radiosity: environment-lit soft shadows and contact
-                occlusion baked into a lightmap that refines over frames. */}
+                occlusion baked into a lightmap that refines over frames. The
+                scene is image-based lit only while it runs: the plain lights
+                above are hidden and their energy goes to the environment map
+                (or three's procedural room when the theme has none). */}
             <FileSheetSelectRow
               label="Quality"
               value={globalIlluminationSettings.quality}

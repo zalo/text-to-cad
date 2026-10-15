@@ -182,3 +182,31 @@ test("integrateUpIrradiance of a uniform unit sky is π", async () => {
   for (let i = 0; i < h / 2; i++) for (let j = 0; j < w; j++) lum[i * w + j] = 0;
   assert.ok(Math.abs(integrateUpIrradiance(lum, w, h)) < 1e-6);
 });
+
+test("themeLightsUpIrradiance sums the plain lights seen by an up-facing surface", async () => {
+  const { themeLightsUpIrradiance } = await import("./radiosityStage.js");
+  assert.equal(themeLightsUpIrradiance(), 0);
+  assert.equal(themeLightsUpIrradiance(null), 0);
+  const white = "#ffffff";
+  // A key light straight overhead at intensity 2 gives irradiance 2.
+  assert.ok(Math.abs(themeLightsUpIrradiance({
+    directional: { enabled: true, color: white, intensity: 2, position: { x: 0, y: 0, z: 5 } }
+  }) - 2) < 1e-9);
+  // At 60° from the zenith only cos(60°) = 0.5 of it lands.
+  assert.ok(Math.abs(themeLightsUpIrradiance({
+    directional: { enabled: true, color: white, intensity: 2, position: { x: Math.sqrt(3), y: 0, z: 1 } }
+  }) - 1) < 1e-9);
+  // Lights below the horizon, disabled lights and positional lights add nothing.
+  assert.equal(themeLightsUpIrradiance({
+    fill: { enabled: true, color: white, intensity: 3, position: { x: 1, y: 0, z: -1 } },
+    rim: { enabled: false, color: white, intensity: 3, position: { x: 0, y: 0, z: 1 } },
+    spot: { enabled: true, color: white, intensity: 9, position: { x: 0, y: 0, z: 1 } },
+    point: { enabled: true, color: white, intensity: 9, position: { x: 0, y: 0, z: 1 } }
+  }), 0);
+  // Hemisphere sky and ambient add their full intensity; colour counts by luminance.
+  const grey = new THREE.Color(0.5, 0.5, 0.5);
+  assert.ok(Math.abs(themeLightsUpIrradiance({
+    hemisphere: { enabled: true, skyColor: grey, intensity: 1 },
+    ambient: { enabled: true, color: white, intensity: 0.25 }
+  }) - 0.75) < 1e-9);
+});
